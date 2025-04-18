@@ -1,0 +1,391 @@
+import logging
+import pandas as pd
+import tempfile
+import os
+
+from datetime import datetime, timedelta
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+from airflow.providers.salesforce.hooks.salesforce import SalesforceHook
+from airflow.providers.amazon.aws.transfers.salesforce_to_s3 import SalesforceToS3Operator
+
+from salesforce_bulk import SalesforceBulk
+
+def fn_salesforce_export():
+  salesforce_hook = SalesforceHook(salesforce_conn_id="Salseforce_Conn")
+  
+  base_query = "SELECT Id, Name FROM Account"
+  
+  endpointUrl = "http://192.168.10.29:9000"
+  awsAccessKeyId = "NkCNrjizEMHIvFrGa3cl"
+  awsSecretAccessKey = "etgLxl58LgPKSWELhDpvrrjdK4VrfoCBFXbK2dtR"
+  orient="records"
+  
+  chunk_size = 2  # 청크 크기 설정   최대 오프셋은 2,000. 2,000보다 큰 오프셋을 요청하면유효 범위를 벗어난 숫자오류. 
+  offset = 0
+  coerceToTimestamp = False
+  recordTimeAdded = False
+  
+  try:
+    while True:
+      query = f"{base_query} LIMIT {chunk_size} OFFSET {offset}"
+      logging.info("query: " + query)
+      response = salesforce_hook.make_query(query)
+      if not response["records"]:
+        break
+      
+      chunk_df = salesforce_hook.object_to_df(
+         query_results=response["records"],
+         coerce_to_timestamp=coerceToTimestamp,
+         record_time_added=recordTimeAdded,
+      )
+      
+      logging.info("content: " + chunk_df)
+
+      # 파일 경로 설정
+      file_path= f"s3://sfquickstarts/salesforce_data/account_data_{datetime.now().strftime('%Y%m%d%H%M%S')}_{offset//chunk_size}.json.gz"
+      
+      # 데이터 저장
+      chunk_df.to_json(file_path, orient=orient, lines=True, force_ascii=False,
+        storage_options={'endpoint_url':endpointUrl, 'key':awsAccessKeyId,'secret':awsSecretAccessKey})
+      
+      logging.info(f"{file_path} 파일이 적재 돼었습니다..")
+      
+      offset += chunk_size
+      logging.info("offset: " + str(offset))
+    
+  except Exception as e:
+    logging.error("Error message : %s", e)
+    raise  
+
+  
+#   response = salesforce_hook.make_query(query)
+#   # logging.info("response ::"+str(response["records"]))
+  
+# # 청크 단위로 데이터 처리
+#   chunk_size = 1 # 청크 크기 설정
+#   for i in range(0, len(response["records"]), chunk_size):
+#     chunk = response["records"][i:i + chunk_size]
+#     chunk_df= salesforce_hook.object_to_df(
+#         query_results=chunk,
+#         coerce_to_timestamp=coerceToTimestamp,
+#         record_time_added=recordTimeAdded,
+#     )
+
+#     logging.info("content: " + chunk_df)
+    
+#     # 파일 경로 설정
+#     file_path= f"s3://sfquickstarts/salesforce_data/account_data_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i//chunk_size}.json.gz"
+
+#     # 데이터 저장
+#     chunk_df.to_json(file_path, orient=orient, lines=True, force_ascii=False,
+#         storage_options={'endpoint_url':endpointUrl, 'key':awsAccessKeyId,'secret':awsSecretAccessKey})
+                        
+#     logging.info(f"{file_path} 파일이 적재 돼었습니다..")
+    
+
+default_args = {
+    'owner': 'jonghyun kim',
+    'retries': 1,
+    'retry_delay': timedelta(minutes=2)
+}
+
+with DAG(
+    dag_id='dag_salesforce_test',
+    default_args=default_args,
+    description='Salesforce 데이터 처리 예제',
+    start_date=datetime(2025, 3, 27),
+    schedule_interval=None,
+    catchup=False,
+    tags=["prd", "migration"],
+) as dag:
+      salesforce_export_task = PythonOperator(
+      task_id='salesforce_export_task',
+      python_callable=fn_salesforce_export,
+)
+
+salesforce_export_task  
+
+'''
+def fn_salesforce_export():
+  salesforce_hook = SalesforceHook(salesforce_conn_id="Salseforce_Conn")
+  
+  query = "SELECT Id, Name FROM Account"
+  
+  response = salesforce_hook.make_query(
+            query
+        )
+  # logging.info("response ::"+str(response["records"]))
+  
+  exportFormat = "csv"
+  coerceToTimestamp = False
+  recordTimeAdded = False
+  
+  # with tempfile.TemporaryDirectory() as tmp:
+  #     path = os.path.join(tmp, "salesforce_temp_file")
+  #     salesforce_hook.write_object_to_file(
+  #         query_results=response["records"],
+  #         filename=path,
+  #         fmt=exportFormat,
+  #         coerce_to_timestamp=coerceToTimestamp,
+  #         record_time_added=recordTimeAdded,
+  #     )
+  
+  
+# # TemporaryDirectory 객체를 직접 생성
+#   tmp = tempfile.TemporaryDirectory()
+#   try:
+#     path = os.path.join(tmp.name, "salesforce_temp_file")
+#     salesforce_hook.write_object_to_file(
+#         query_results=response["records"],
+#         filename=path,
+#         fmt=exportFormat,
+#         coerce_to_timestamp=coerceToTimestamp,
+#         record_time_added=recordTimeAdded,
+#     )
+#     # 필요한 작업 수행
+    
+#     logging.info("File written to: " + path)
+#     # 파일이 존재하는지 확인
+#     if os.path.exists(path):
+#         logging.info("File exists: " + path)
+#         # 파일 내용 출력
+#         with open(path, 'r') as file:
+#             content = file.read()
+#             logging.info("content: " + content)
+#     else:
+#         logging.error("File does not exist: " + path)
+#   finally:
+#      # 임시 디렉토리를 삭제하지 않으려면 tmp.cleanup()을 호출하지 않음
+#      pass
+
+  chunk_df= salesforce_hook.object_to_df(
+        query_results=response["records"],
+        coerce_to_timestamp=coerceToTimestamp,
+        record_time_added=recordTimeAdded,
+  )
+
+  logging.info("content: " + chunk_df)
+  
+  final_file_path= f"s3://sfquickstarts/salesforce_data/account_data_{datetime.now().strftime('%Y%m%d%H%M%S')}_1.json.gz"
+  endpointUrl = "http://192.168.10.29:9000"
+  awsAccessKeyId = "NkCNrjizEMHIvFrGa3cl"
+  awsSecretAccessKey = "etgLxl58LgPKSWELhDpvrrjdK4VrfoCBFXbK2dtR"
+  orient="records"
+  
+  logging.info("final_file_path: " + final_file_path)
+  
+  chunk_df.to_json(final_file_path, orient=orient, lines=True, force_ascii=False,
+             storage_options={'endpoint_url':endpointUrl, 'key':awsAccessKeyId,'secret':awsSecretAccessKey})
+                        
+  logging.info(f"{final_file_path} 파일이 적재 돼었습니다..")
+                        
+
+default_args = {
+    'owner': 'jonghyun kim',
+    'retries': 1,
+    'retry_delay': timedelta(minutes=2)
+}
+
+with DAG(
+    dag_id='dag_salesforce_test',
+    default_args=default_args,
+    description='Salesforce 데이터 처리 예제',
+    start_date=datetime(2025, 3, 27),
+    schedule_interval=None,
+    catchup=False,
+    tags=["prd", "migration"],
+) as dag:
+      salesforce_export_task = PythonOperator(
+      task_id='salesforce_export_task',
+      python_callable=fn_salesforce_export,
+)
+
+
+# def fn_salesforce_export():
+#   Salesforce_hook = SalesforceHook(salesforce_conn_id="Salseforce_Conn")
+#   s3_hook = S3Hook(aws_conn_id='locknlock_s3')
+
+#   Salesforce_hook.get_object_from_salesforce
+  
+#   try:
+#     conn = Salesforce_hook.get_conn()
+#     logging.info("Salesforce에 성공적으로 접속했습니다.")
+
+#     query = "SELECT Id, Name FROM Account"
+#     result = Salesforce_hook.make_query(query)
+
+#     records = result['records']
+#     chunk_size = 1000
+
+#     final_file_path = "s3://sfquickstarts/salesforce_data/account_data.json" 
+#     endpointUrl = "http://192.168.10.29:9000"
+#     awsAccessKeyId = "NkCNrjizEMHIvFrGa3cl"
+#     awsSecretAccessKey = "etgLxl58LgPKSWELhDpvrrjdK4VrfoCBFXbK2dtR"
+#     bucket_name = "sfquickstarts"
+      
+#     for i in range(0, len(records), chunk_size):
+#       chunk_df = pd.DataFrame(records[i:i + chunk_size])
+#       logging.info("chunk_df  : %s ", str(chunk_df))
+       
+#       chunk_df.to_json(final_file_path, orient="records", lines=True, force_ascii=False,
+#               storage_options={'endpoint_url':endpointUrl, 'key':awsAccessKeyId,'secret':awsSecretAccessKey})
+                        
+#       logging.info(f"{final_file_path} 파일이 적재 돼었습니다..")
+      
+    
+#     # for i in range(0, len(records), chunk_size):
+#     #     chunk_df = pd.DataFrame(records[i:i + chunk_size])
+#     #     file_name = f"salesforce_data/account_data_{datetime.now().strftime('%Y%m%d%H%M%S')}_{i//chunk_size}.json"
+        
+#     #     s3_hook.load_string(chunk_df.to_json(orient='records'), key=file_name, bucket_name=bucket_name, replace=True)
+#     #     logging.info("Uploaded chunk to S3: %s", file_name)
+
+#   except Exception as e:
+#     logging.error("오류 메시지: %s", e)
+
+# default_args = {
+#     'owner': 'jonghyun kim',
+#     'retries': 1,
+#     'retry_delay': timedelta(minutes=2)
+# }
+
+# with DAG(
+#     dag_id='dag_salesforce_test',
+#     default_args=default_args,
+#     description='Salesforce 데이터 처리 예제',
+#     start_date=datetime(2025, 3, 27),
+#     schedule_interval=None,
+#     catchup=False,
+#     tags=["prd", "migration"],
+# ) as dag:
+#       salesforce_export_task = PythonOperator(
+#       task_id='salesforce_export_task',
+#       python_callable=fn_salesforce_export,
+# )
+
+# salesforce_export_task
+
+
+# default_args = {
+#   'owner': 'jonghyun kim',
+#   'retries': 1,
+#   'retry_delay': timedelta(minutes=2)
+# }
+
+# with DAG(
+#     dag_id='dag_salesforce_to_s3',
+#     default_args=default_args,
+#     description='Salesforce 데이터를 S3로 내보내는 예제',
+#     start_date=datetime(2025, 3, 27),
+#     schedule_interval=None,
+#     catchup=False,
+#     tags=["prd", "migration"],
+# ) as dag:
+#   export_salesforce_to_s3 = SalesforceToS3Operator(
+#       task_id='export_salesforce_to_s3',
+#       salesforce_conn_id='Salseforce_Conn',
+#       aws_conn_id='locknlock_s3',
+#       salesforce_query="SELECT Id, Name FROM Account",
+#       s3_bucket_name='sfquickstarts',
+#       s3_key='salesforce_data/account_data.json',
+#       replace=True,
+#       gzip=False,
+#     )
+
+# export_salesforce_to_s3
+
+'''
+
+
+
+'''
+def connect_salesforce():
+  hook = SalesforceHook(salesforce_conn_id="Salseforce_Conn")
+  try:
+    # conn = hook.get_conn()
+    # logging.info("Salesforce에 성공적으로 접속했습니다.")
+    
+    # query = "SELECT * FROM Account"
+    
+    # result = conn.query(query)
+    # logging.info("Salesforce 테이블을 성공적으로 읽었습니다.")
+    
+    # sql = "SELECT Id, Name FROM Account"
+    # df = hook.make_query(sql)
+    
+    # logging.info("df  : %s ", str(df))
+    
+    query = "SELECT Id, Name FROM Account"
+    conn = hook.get_conn()
+    
+    for chunk_df in pd.read_sql(query, conn, chunksize=2):
+      logging.info("chunk_df  : %s ", str(chunk_df))
+      
+    conn.close()  
+    
+  except Exception as e:
+    logging.error("Salesforce 오류: %s", e)
+    raise
+
+def read_salesforce_table(conn):
+  query = "SELECT Id, Name FROM Account"
+  try:
+    result = conn.query(query)
+    logging.info("Salesforce 테이블을 성공적으로 읽었습니다.")
+    return result['records']
+  except Exception as e:
+    logging.error("Salesforce 테이블 읽기 오류: %s", e)
+    raise
+
+def convert_to_dataframe(records):
+  try:
+    df = pd.DataFrame(records)
+    logging.info("데이터를 Pandas 데이터 프레임으로 성공적으로 변환했습니다.")
+    return df
+  except Exception as e:
+    logging.error("데이터 프레임 변환 오류: %s", e)
+    raise
+
+def print_dataframe(df):
+  try:
+    logging.info("데이터 프레임 출력:\n%s", df)
+  except Exception as e:
+    logging.error("데이터 프레임 출력 오류: %s", e)
+    raise
+
+default_args = {
+    'owner': 'jonghyun kim',
+    'retries': 1,
+    'retry_delay': timedelta(minutes=2)
+}
+
+with DAG(
+    dag_id='dag_salesforce_example',
+    default_args=default_args,
+    description='Salesforce 데이터 처리 예제',
+    start_date=datetime(2025, 3, 27),
+    schedule_interval=None,
+    catchup=False,
+    tags=["prd", "migration"],
+) as dag:
+    connect_task = PythonOperator(
+    task_id='connect_salesforce',
+    python_callable=connect_salesforce
+    )
+    # read_task = PythonOperator(
+    #   task_id='read_salesforce_table',
+    #   python_callable=lambda **kwargs: read_salesforce_table(kwargs['ti'].xcom_pull(task_ids='connect_salesforce')),
+    # ) 
+    # convert_task = PythonOperator(
+    #   task_id='convert_to_dataframe',
+    #   python_callable=lambda **kwargs: convert_to_dataframe(kwargs['ti'].xcom_pull(task_ids='read_salesforce_table')),
+    # )
+    # print_task = PythonOperator(
+    #   task_id='print_dataframe',
+    #   python_callable=lambda **kwargs: print_dataframe(kwargs['ti'].xcom_pull(task_ids='convert_to_dataframe')),
+    # )
+# connect_task >> read_task >> convert_task >> print_task
+
+connect_task
+'''

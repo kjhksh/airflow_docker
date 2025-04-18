@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<queries>
+    <query id="select_orderDetails">
+        <![CDATA[
+          SELECT * FROM SF120_ACTLOG.ACTIONLOG
+          WHERE
+             <conditions>
+        ]]>
+    </query>
+    <query id="select_order">
+        <![CDATA[
+          WITH data  AS
+          ( 
+            SELECT /*+ PARALLEL(A,8) */ * FROM SF120_ACTLOG.ACTIONLOG A
+          ),
+          numbers AS (
+                SELECT LEVEL AS num FROM dual
+                CONNECT BY LEVEL <= 1  -- 원하는 행 수만큼 LEVEL 값을 설정
+          )
+          SELECT d.*, n.num
+          FROM data d, numbers n
+        ]]>
+    </query>
+
+    <!--
+    <query id="select_users">
+        <![CDATA[
+        SELECT * FROM users WHERE id = :id"
+        ]]>
+    </query>
+    -->
+
+    <!--
+    <query id="select_users">
+        <![CDATA[
+        SELECT * FROM users WHERE id = #{id}
+        ]]>
+    </query>
+    -->
+</queries>

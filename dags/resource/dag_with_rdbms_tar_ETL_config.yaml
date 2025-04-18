@@ -1,0 +1,50 @@
+#project_info
+name: 'dag_oracle_to_s3_python_improved'
+version: '0.1.0'
+description: (EL) locknlock oracle tables (2025) > locknlock_s3 json.gz files
+tags:
+  - prd
+  - migration
+  - oralce
+  - s3
+  - python
+jobs:
+  description: (EL) locknlock oracle tables (2025) > locknlock_s3 json.gz files
+  settings:
+    # schedule: once
+    sources:
+        conn_id: oracle_220
+        sql_path: resource/locknlock_s3_2025_mig.xml
+    targets:
+        conn_id : locknlock_s3
+        endpoint_url: http://192.168.10.29:9000
+        bucket_name: sfquickstarts
+        aws_access_key_id: NkCNrjizEMHIvFrGa3cl
+        aws_secret_access_key: etgLxl58LgPKSWELhDpvrrjdK4VrfoCBFXbK2dtR
+        num_rows_per_file: 10000
+        file_format: json.gz
+        orient: records
+  job_list:
+    - id: select_orderDetails
+      queryparams: "USER_NAME  = 'admin' AND ROWNUM =1 AND LOGGED_TIME <= TO_DATE('<startDate>') AND LOGGED_TIME <= TO_DATE('<endDate>')  " 
+      targets:
+          name: order_detail
+          account_name: tastybytes_01
+          table_name: order_detail
+          # file_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}/{table_name}_[1,+1].{file_format}"
+          file_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}/{table_name}"
+          log_path: "{account_name}/raw_pos/{table_name}"
+          # log_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}"
+    - id: select_order
+      queryparams: "USER_NAME  = 'admin' AND ROWNUM =1 AND LOGGED_TIME <= TO_DATE('<startDate>') AND LOGGED_TIME <= TO_DATE('<endDate>')  " 
+      targets:
+          name: order
+          account_name: tastybytes_01
+          table_name: order
+          # file_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}/{table_name}_[1,+1].{file_format}"
+          file_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}/{table_name}"
+          log_path: "{account_name}/raw_pos/{table_name}"
+          # log_path: "s3://{bucket_name}/{account_name}/raw_pos/{table_name}"
+
+
+          
